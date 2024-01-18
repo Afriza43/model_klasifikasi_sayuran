@@ -20,7 +20,7 @@ from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, BatchNormalizatio
 from keras.models import Sequential
 from keras.preprocessing import image
 from keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.applications import VGG16
+from tensorflow.keras.applications import VGG16, EfficientNetB0
 from sklearn.metrics import confusion_matrix,classification_report
 import os, shutil
 import warnings
@@ -34,13 +34,8 @@ import opendatasets as od
 
 od.download('https://www.kaggle.com/datasets/misrakahmed/vegetable-image-dataset')
 
-pip install split-folders
-
-import splitfolders
-splitfolders.ratio('/content/vegetable-image-dataset/Vegetable Images/train', output="dataset", seed=1337, ratio=(.8, 0.2))
-
-train_data = "/content/dataset/train"
-validation_data = "/content/dataset/val"
+train_data = "/content/vegetable-image-dataset/Vegetable Images/train"
+validation_data = "/content/vegetable-image-dataset/Vegetable Images/validation"
 
 """## Augmentasi Gambar"""
 
@@ -59,7 +54,7 @@ train_gen = ImageDataGenerator( featurewise_center=False,
 
 train_image_generator = train_gen.flow_from_directory(
                                             train_data,
-                                            target_size=(150, 150),
+                                            target_size=(224, 224),
                                             batch_size=32,
                                             class_mode='categorical')
 
@@ -67,39 +62,47 @@ train_image_generator = train_gen.flow_from_directory(
 val_gen = ImageDataGenerator()
 val_image_generator = val_gen.flow_from_directory(
                                             validation_data,
-                                            target_size=(150, 150),
+                                            target_size=(224, 224),
                                             batch_size=32,
                                             class_mode='categorical')
 
+"""## Transfer Learning"""
+
+base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+
+# Freeze the base model layers
+base_model.trainable = False
+
 """## CNN Model"""
 
+learning_rate = 0.001
+dropout_rate = 0.5
+dense_rate = 128
+
 model = tf.keras.models.Sequential([
-    Conv2D(filters = 32, kernel_size = (5,5),padding = 'Same',activation ='relu', input_shape = (150,150,3)),
-    MaxPooling2D(pool_size=(2, 2)),
-    Conv2D(filters = 64, kernel_size = (3,3),padding = 'Same',activation ='relu'),
-    MaxPooling2D(pool_size=(2,2), strides=(2,2)),
-    Conv2D(filters = 96, kernel_size = (5,5),padding = 'Same',activation ='relu', input_shape = (150,150,3)),
-    MaxPooling2D(pool_size=(2, 2)),
-    Conv2D(filters = 96, kernel_size = (3,3),padding = 'Same',activation ='relu'),
-    MaxPooling2D(pool_size=(2,2), strides=(2,2)),
-    Flatten(),
-    Dense(512,activation='relu'),
-    BatchNormalization(),
-    Dropout(0.25),
-    Dense(512,activation='relu'),
-    Dense(15, activation = "softmax"),
-])
+      base_model,
+      GlobalAveragePooling2D(),
+      Dense(dense_rate, activation='relu'),
+      Dropout(dropout_rate),
+      Dense(15, activation='softmax')  # Adjust 15 for your number of classes
+      ])
 
-model.summary()
-
-model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss='categorical_crossentropy', metrics='accuracy')
+model.compile(optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
 
 """## Callback"""
 
+checkpoint = keras.callbacks.ModelCheckpoint(
+             'efficinentB0_best.h5',
+             save_best_only=True,
+             monitor='val_accuracy',
+             mode='max')
+
 class myCallback(tf.keras.callbacks.Callback):
   def on_epoch_end(self, epoch, logs={}):
-    if(logs.get('accuracy')>0.92 and logs.get('val_accuracy')>0.92):
-      print("accuracy > 92% skala data")
+    if(logs.get('accuracy')>0.99 and logs.get('val_accuracy')>0.99):
+      print("accuracy > 99% skala data")
       self.model.stop_training = True
 callbacks = myCallback()
 
@@ -108,14 +111,9 @@ early_stopping = keras.callbacks.EarlyStopping(patience=3,monitor='val_loss',res
 """## Model Train"""
 
 history = model.fit(train_image_generator,
-                 epochs=50,
-                 verbose=1,
-                 validation_data=val_image_generator,
-                 steps_per_epoch = 15000//32,
-                 validation_steps = 3000//32,
-                  callbacks=[callbacks],
-                 workers=4
-                )
+                    validation_data=val_image_generator,
+                    epochs=10,
+                    callbacks=[checkpoint])
 
 """## Evaluasi Model"""
 
@@ -124,6 +122,45 @@ model.evaluate(train_image_generator)
 model.evaluate(val_image_generator)
 
 pd.DataFrame(history.history).plot()
+
+"""## Testing"""
+
+test_data = "/content/vegetable-image-dataset/Vegetable Images/test"
+
+test_gen = ImageDataGenerator()
+test_image_generator = test_gen.flow_from_directory(
+                                            test_data,
+                                            target_size=(224, 224),
+                                            batch_size=32,
+                                            class_mode='categorical')
+
+model = keras.models.load_model('/content/efficinentB0_best.h5')
+
+model.evaluate(test_image_generator)
+
+from tensorflow.keras.preprocessing.image import load_img
+
+image_path = '/content/vegetable-image-dataset/Vegetable Images/test/Tomato/1004.jpg'
+image = load_img(image_path, target_size = (224, 224))
+x = np.array(image)
+X = np.array([x])
+
+from tensorflow.keras.applications.efficientnet import preprocess_input
+
+X = preprocess_input(X)
+
+pred = model.predict(X)
+pred
+
+class_labels = ['Bean', 'Bitter_Gourd', 'Bottle_Gourd', 'Brinjal', 'Broccoli', 'Cabbage', 'Capsicum', 'Carrot', 'Cauliflower', 'Cucumber', 'Papaya', 'Potato', 'Pumpkin', 'Radish', 'Tomato']
+print("Class Labels:", class_labels)
+
+preds = dict(zip(class_labels, pred[0]))
+
+max_value = max(preds[label] for label in class_labels)
+max_label = [label for label in class_labels if preds[label] == max_value]
+
+print(f"Ini adalah buah : {max_label}")
 
 """## Menyimpan Model"""
 
