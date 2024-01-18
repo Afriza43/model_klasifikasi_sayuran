@@ -27,6 +27,6 @@ In this innovative project, I have developed a model capable of detecting and cl
 - Waiting for model training
 - Test the model (If you want to test using docker tf-serving, you can use Test_Deployment.ipynb file)
 
-## <a name="dataset-link"></a> Website URL :
+## <a name="dataset-link"></a> Dataset URL :
 
 https://www.kaggle.com/datasets/misrakahmed/vegetable-image-dataset
